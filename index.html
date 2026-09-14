@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta name="copyright" content="Copyright © 2026 KGStudio. All Rights Reserved.">
+<meta name="author" content="KGStudio">
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Human Motion Studio v9.7.4 — Smooth Directional Walk</title>
+<style>
+html,body{margin:0;height:100%;background:#070b10;color:#eef4f7;font-family:Arial,Helvetica,sans-serif}
+#app{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 340px;grid-template-rows:60px minmax(0,1fr) 72px}
+header{grid-column:1/3;background:#151c23;border-bottom:1px solid #2d3740;display:flex;align-items:center;gap:7px;padding:0 12px}
+header h1{font-size:17px;margin:0 12px 0 0}
+button,select{background:#374652;color:#fff;border:0;border-radius:7px;padding:9px 11px;font-weight:bold}
+#recBtn{background:#a83439}#playBtn{background:#286ca8}#easyBtn{background:#2e815c}
+#view{position:relative;min-width:0;min-height:0;background:#081018}
+#scene{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{position:absolute;left:12px;top:12px;background:rgba(8,14,20,.86);padding:8px 10px;border-radius:7px;font-size:12px}
+#debug{position:absolute;left:12px;bottom:12px;background:rgba(8,14,20,.86);padding:6px 8px;border-radius:7px;font-size:11px;color:#adc2d2}
+aside{background:#141a20;border-left:1px solid #2d3740;padding:12px;overflow:auto}
+.card{background:#1a222a;border:1px solid #2a3640;border-radius:9px;padding:10px;margin-bottom:9px}
+.card h2{font-size:12px;margin:0 0 8px}.row{display:flex;align-items:center;gap:7px;margin:7px 0}.row label{font-size:12px;flex:1}
+.muted{font-size:11px;line-height:1.45;color:#93a1ad}.wide{width:100%;margin-top:6px}
+#presets{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+footer{grid-column:1/3;background:#141a20;border-top:1px solid #2d3740;padding:8px 14px}
+#timeline{width:100%}
+#status{margin-left:auto;color:#c4d0d8;font-size:12px}
+
+/* v9.7.4 square UI */
+.card, button, input, select, canvas, #viewport, #hint, #status, .badge, .panel, .toolbar {
+  border-radius: 0 !important;
+}
+
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+<h1>Human Motion Studio v9.7.4 — Smooth Directional Walk</h1>
+<button id="recBtn">● REC</button><button id="stopBtn">■ STOP</button><button id="playBtn">▶ PLAY</button>
+<button id="easyBtn">Easy Record</button><button id="poseBtn">POSE</button><span id="status">Initialisation…</span>
+</header>
+<div id="view">
+<canvas id="scene"></canvas>
+<div id="hud">Squelette 3D • clic articulation = sélectionner • glisser = déplacement • clic vide = rotation caméra</div>
+<div id="debug">Chargement du squelette…</div>
+</div>
+<aside>
+<div class="card"><h2>DÉPLACEMENT XYZ</h2>
+<div class="row"><label>Plan</label><select id="plane"><option value="xy">X / Y</option><option value="xz">X / Z</option><option value="yz">Y / Z</option></select></div>
+<div class="row"><label>Zoom</label><input id="zoom" type="range" min="350" max="950" value="650"></div>
+<div class="row"><label>Articulations</label><input id="jointSize" type="range" min="5" max="13" value="8"></div>
+<div class="muted">Les coordonnées enregistrées sont des positions 3D réelles x/y/z. La vue est une projection perspective du rig.</div>
+</div>
+<div class="card"><h2>LOCOMOTION</h2><div id="presets">
+<button data-preset="walk">Walk forward</button><button data-preset="backwalk">Walk backward</button>
+<button data-preset="turn180L">U-turn left</button><button data-preset="turn180R">U-turn right</button>
+<button data-preset="turn90L">90° turn left</button><button data-preset="turn90R">90° turn right</button>
+</div>
+<div class="muted" style="margin-top:8px">
+Longer, continuous motion: the gait cycle no longer restarts at the beginning of a turn, preventing visible jolts.
+</div></div></div>
+<div class="card"><h2>HUMANIZATION</h2>
+<div class="row"><label>Triangulated body</label><input id="meshOn" type="checkbox" checked></div>
+<div class="row"><label>Secondary motion</label><input id="secondary" type="range" min="0" max="1" step=".01" value=".58"></div>
+<div class="muted">The rig remains editable while the body is rendered as a thin low-poly triangulated mannequin with subtle secondary motion.</div>
+</div>
+<div class="card"><h2>3D JSON</h2>
+<button id="exportBtn" class="wide">Exporter JSON</button>
+<button id="importBtn" class="wide">Charger JSON</button>
+<input id="fileInput" type="file" accept=".json" hidden>
+<div id="trackInfo" class="muted" style="margin-top:8px">Aucune piste</div>
+</div>
+</aside>
+<footer><div id="timeText">00:00.000</div><input id="timeline" type="range" min="0" max="1" step=".001" value="0"></footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+
+var BASE={
+ pelvis:[0,1.00,0], spine1:[0,1.16,0], spine2:[0,1.33,0], chest:[0,1.50,0], neck:[0,1.66,0], head:[0,1.82,0],
+ clavicleL:[-.11,1.53,0], shoulderL:[-.22,1.50,0], elbowL:[-.27,1.19,.015], wristL:[-.25,.91,.03], handL:[-.24,.82,.055],
+ clavicleR:[.11,1.53,0], shoulderR:[.22,1.50,0], elbowR:[.27,1.19,.015], wristR:[.25,.91,.03], handR:[.24,.82,.055],
+ hipL:[-.12,.98,0], kneeL:[-.13,.55,.02], ankleL:[-.13,.10,0], heelL:[-.13,.045,-.05], ballL:[-.13,.035,.12], toeL:[-.13,.035,.22],
+ hipR:[.12,.98,0], kneeR:[.13,.55,.02], ankleR:[.13,.10,0], heelR:[.13,.045,-.05], ballR:[.13,.035,.12], toeR:[.13,.035,.22]
+};
+
+var BONES=[
+ ["pelvis","spine1"],["spine1","spine2"],["spine2","chest"],["chest","neck"],["neck","head"],
+ ["chest","clavicleL"],["clavicleL","shoulderL"],["shoulderL","elbowL"],["elbowL","wristL"],["wristL","handL"],
+ ["chest","clavicleR"],["clavicleR","shoulderR"],["shoulderR","elbowR"],["elbowR","wristR"],["wristR","handR"],
+ ["pelvis","hipL"],["hipL","kneeL"],["kneeL","ankleL"],["ankleL","heelL"],["heelL","ballL"],["ballL","toeL"],
+ ["pelvis","hipR"],["hipR","kneeR"],["kneeR","ankleR"],["ankleR","heelR"],["heelR","ballR"],["ballR","toeR"]
+];
+
+var canvas=document.getElementById("scene");
+var ctx=canvas.getContext("2d");
+var view=document.getElementById("view");
+var statusEl=document.getElementById("status");
+var debugEl=document.getElementById("debug");
+var timeline=document.getElementById("timeline");
+var trackInfo=document.getElementById("trackInfo");
+var timeText=document.getElementById("timeText");
+var plane=document.getElementById("plane");
+var zoom=document.getElementById("zoom");
+var jointSize=document.getElementById("jointSize");
+var meshOn=document.getElementById("meshOn");
+var muscleCtrl={value:"0"};
+var secondaryCtrl=document.getElementById("secondary");
+var pos=clone(BASE), target=clone(BASE);
+var selected=null, drag=null, orbit=null;
+var cam={yaw:.42,pitch:-.08,dist:3.2};
+var frames=[], track=[], duration=0, recording=false, playing=false, armed=false, t0=0, play0=0, lastFrame=-1;
+var FPS=60;
+
+function resize(){
+ var r=view.getBoundingClientRect();
+ var dpr=window.devicePixelRatio||1;
+ canvas.width=Math.max(1,Math.floor(r.width*dpr));
+ canvas.height=Math.max(1,Math.floor(r.height*dpr));
+ canvas.style.width=r.width+"px"; canvas.style.height=r.height+"px";
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener("resize",resize);
+
+function rot(p){
+ var x=p[0],y=p[1]-1,z=p[2];
+ var cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+ var x1=x*cy-z*sy, z1=x*sy+z*cy;
+ var cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+ var y1=y*cp-z1*sp, z2=y*sp+z1*cp;
+ return [x1,y1,z2];
+}
+function project(p){
+ var r=view.getBoundingClientRect(), q=rot(p);
+ var f=Number(zoom.value)/(cam.dist+q[2]);
+ return [r.width*.5+q[0]*f, r.height*.53-q[1]*f, q[2], f];
+}
+
+function rotateYPoint(p,center,ang){
+ var x=p[0]-center[0],z=p[2]-center[2],c=Math.cos(ang),s=Math.sin(ang);
+ p[0]=center[0]+x*c-z*s;p[2]=center[2]+x*s+z*c;
+}
+function rotateGroupY(names,center,ang){
+ for(var i=0;i<names.length;i++)rotateYPoint(target[names[i]],center,ang);
+}
+function lerp(a,b,t){return a+(b-a)*t;}
+function smoothstep(t){t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);}
+
+function line3(a,b,width,stroke){
+ var A=project(target[a]),B=project(target[b]);
+ ctx.strokeStyle=stroke;ctx.lineWidth=width;ctx.lineCap="round";
+ ctx.beginPath();ctx.moveTo(A[0],A[1]);ctx.lineTo(B[0],B[1]);ctx.stroke();
+}
+function drawGrid(){
+ ctx.lineWidth=1;
+ for(var i=-10;i<=10;i++){
+   var a=project([i*.2,0,-2]),b=project([i*.2,0,2]);
+   ctx.strokeStyle=i===0?"rgba(190,210,225,.26)":"rgba(80,110,130,.20)";
+   ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+   a=project([-2,0,i*.2]);b=project([2,0,i*.2]);
+   ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+ }
+}
+function drawBodyGhost(){
+ line3("pelvis","chest",50,"rgba(68,135,175,.18)");
+ line3("clavicleL","shoulderL",22,"rgba(68,135,175,.18)");line3("shoulderL","elbowL",28,"rgba(68,135,175,.18)");
+ line3("elbowL","wristL",20,"rgba(68,135,175,.18)");
+ line3("clavicleR","shoulderR",22,"rgba(68,135,175,.18)");line3("shoulderR","elbowR",28,"rgba(68,135,175,.18)");
+ line3("elbowR","wristR",20,"rgba(68,135,175,.18)");
+ line3("hipL","kneeL",34,"rgba(68,135,175,.18)");
+ line3("kneeL","ankleL",24,"rgba(68,135,175,.18)");
+ line3("hipR","kneeR",34,"rgba(68,135,175,.18)");
+ line3("kneeR","ankleR",24,"rgba(68,135,175,.18)");
+ var h=project(target.head);ctx.fillStyle="rgba(68,135,175,.22)";
+ ctx.beginPath();ctx.arc(h[0],h[1],32,0,Math.PI*2);ctx.fill();
+}
+
+function P3(name){ return target[name]; }
+function mid(a,b,t){return [a[0]*(1-t)+b[0]*t,a[1]*(1-t)+b[1]*t,a[2]*(1-t)+b[2]*t];}
+function add3(a,b){return [a[0]+b[0],a[1]+b[1],a[2]+b[2]];}
+function sub3(a,b){return [a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+function mul3(a,s){return [a[0]*s,a[1]*s,a[2]*s];}
+function norm3(a){var d=Math.sqrt(a[0]*a[0]+a[1]*a[1]+a[2]*a[2])||1;return [a[0]/d,a[1]/d,a[2]/d];}
+function cross3(a,b){return [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+
+function bodyRing(a,b,r,segments){
+  var A=P3(a),B=P3(b),axis=norm3(sub3(B,A));
+  var up=Math.abs(axis[1])>.9?[1,0,0]:[0,1,0];
+  var u=norm3(cross3(axis,up)),v=norm3(cross3(axis,u));
+  var out=[];
+  for(var i=0;i<segments;i++){
+    var ang=i/segments*Math.PI*2;
+    var off=add3(mul3(u,Math.cos(ang)*r),mul3(v,Math.sin(ang)*r));
+    out.push([add3(A,off),add3(B,off)]);
+  }
+  return out;
+}
+function drawTri(a,b,c,alpha){
+  var A=project(a),B=project(b),C=project(c);
+  var z=(A[2]+B[2]+C[2])/3;
+  var shade=Math.max(70,Math.min(205,145+z*24));
+  ctx.fillStyle="rgba("+shade+","+(shade+12)+","+(shade+18)+","+alpha+")";
+  ctx.strokeStyle="rgba(215,230,238,.20)";
+  ctx.lineWidth=.65;
+  ctx.beginPath();ctx.moveTo(A[0],A[1]);ctx.lineTo(B[0],B[1]);ctx.lineTo(C[0],C[1]);ctx.closePath();ctx.fill();ctx.stroke();
+}
+function tubeMesh(a,b,r1,r2,segments,alpha){
+  var A=P3(a),B=P3(b),axis=norm3(sub3(B,A));
+  var up=Math.abs(axis[1])>.9?[1,0,0]:[0,1,0];
+  var u=norm3(cross3(axis,up)),v=norm3(cross3(axis,u));
+  var ringA=[],ringB=[];
+  for(var i=0;i<segments;i++){
+    var ang=i/segments*Math.PI*2,ca=Math.cos(ang),sa=Math.sin(ang);
+    ringA.push(add3(A,add3(mul3(u,ca*r1),mul3(v,sa*r1))));
+    ringB.push(add3(B,add3(mul3(u,ca*r2),mul3(v,sa*r2))));
+  }
+  for(var j=0;j<segments;j++){
+    var n=(j+1)%segments;
+    drawTri(ringA[j],ringB[j],ringB[n],alpha);
+    drawTri(ringA[j],ringB[n],ringA[n],alpha);
+  }
+}
+function sphereMesh(center,rx,ry,rz,alpha){
+  var c=center, rings=5,segs=8;
+  var pts=[];
+  for(var r=0;r<=rings;r++){
+    var phi=-Math.PI/2+r/rings*Math.PI,row=[];
+    for(var s=0;s<segs;s++){
+      var th=s/segs*Math.PI*2;
+      row.push([c[0]+Math.cos(phi)*Math.cos(th)*rx,c[1]+Math.sin(phi)*ry,c[2]+Math.cos(phi)*Math.sin(th)*rz]);
+    }
+    pts.push(row);
+  }
+  for(var rr=0;rr<rings;rr++)for(var ss=0;ss<segs;ss++){
+    var nn=(ss+1)%segs;
+    drawTri(pts[rr][ss],pts[rr+1][ss],pts[rr+1][nn],alpha);
+    drawTri(pts[rr][ss],pts[rr+1][nn],pts[rr][nn],alpha);
+  }
+}
+function drawLowPolyBody(){
+  if(!meshOn.checked)return;
+  var m=0;
+  var a=.44;
+  // torso, neck, head
+  tubeMesh("pelvis","spine2",.18+m*.035,.16+m*.04,8,a);
+  tubeMesh("spine2","chest",.17+m*.045,.25+m*.05,8,a);
+  tubeMesh("chest","neck",.22+m*.04,.075,8,a);
+  sphereMesh(P3("head"),.12,.145,.115,.58);
+  // shoulders/arms
+  tubeMesh("clavicleL","shoulderL",.06,.075+m*.02,6,a);tubeMesh("shoulderL","elbowL",.075+m*.025,.055+m*.015,6,a);
+  tubeMesh("elbowL","wristL",.055+m*.015,.04,6,a);tubeMesh("wristL","handL",.045,.055,6,a);
+  tubeMesh("clavicleR","shoulderR",.06,.075+m*.02,6,a);tubeMesh("shoulderR","elbowR",.075+m*.025,.055+m*.015,6,a);
+  tubeMesh("elbowR","wristR",.055+m*.015,.04,6,a);tubeMesh("wristR","handR",.045,.055,6,a);
+  // legs
+  tubeMesh("hipL","kneeL",.11+m*.025,.075+m*.018,7,a);tubeMesh("kneeL","ankleL",.075+m*.018,.048,7,a);
+  tubeMesh("ankleL","ballL",.05,.065,6,a);
+  tubeMesh("hipR","kneeR",.11+m*.025,.075+m*.018,7,a);tubeMesh("kneeR","ankleR",.075+m*.018,.048,7,a);
+  tubeMesh("ankleR","ballR",.05,.065,6,a);
+  // pelvis/glutes
+  sphereMesh(P3("pelvis"),.21+m*.035,.14,.14+m*.025,.44);
+}
+function drawSkeleton(){
+ var r=view.getBoundingClientRect();
+ ctx.clearRect(0,0,r.width,r.height);
+ ctx.fillStyle="#081018";ctx.fillRect(0,0,r.width,r.height);
+
+ drawGrid();
+ // Visualise la trajectoire globale au sol pour les séquences qui se déplacent.
+ if(track.length>1){
+   ctx.strokeStyle="rgba(255,190,90,.5)";ctx.lineWidth=2;ctx.beginPath();
+   var started=false;
+   for(var ti=0;ti<track.length;ti+=Math.max(1,Math.floor(track.length/120))){
+     var jf=track[ti].joints&&track[ti].joints.pelvis;if(!jf)continue;
+     var pp=project([jf.x,.015,jf.z]);
+     if(!started){ctx.moveTo(pp[0],pp[1]);started=true;}else ctx.lineTo(pp[0],pp[1]);
+   }
+   if(started)ctx.stroke();
+ }
+ drawLowPolyBody();
+
+ for(var i=0;i<BONES.length;i++){
+   line3(BONES[i][0],BONES[i][1],meshOn.checked?4:10,meshOn.checked?"rgba(238,244,247,.42)":"#e8eef2");
+   if(!meshOn.checked)line3(BONES[i][0],BONES[i][1],3,"rgba(86,122,145,.75)");
+ }
+ var size=Number(jointSize.value);
+ for(var name in target){
+   var P=project(target[name]);
+   ctx.beginPath();
+   ctx.arc(P[0],P[1],name===selected?size+5:(name==="head"||name==="pelvis"?size+2:size),0,Math.PI*2);
+   ctx.fillStyle=name===selected?"#ffd25f":(meshOn.checked?"rgba(255,255,255,.55)":"#ffffff");
+   ctx.fill();
+   ctx.strokeStyle="#21333f";ctx.lineWidth=2;ctx.stroke();
+ }
+ if(selected){
+   var O=project(target[selected]);
+   var axes=[[[.18,0,0],"#ff5b5b"],[[0,.18,0],"#66dc7a"],[[0,0,.18],"#5d8cff"]];
+   for(var a=0;a<axes.length;a++){
+     var v=axes[a][0],Q=project([target[selected][0]+v[0],target[selected][1]+v[1],target[selected][2]+v[2]]);
+     ctx.strokeStyle=axes[a][1];ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(O[0],O[1]);ctx.lineTo(Q[0],Q[1]);ctx.stroke();
+   }
+ }
+}
+
+function nearest(x,y){
+ var best=null,d=30;
+ for(var n in target){
+   var p=project(target[n]),q=Math.sqrt((p[0]-x)*(p[0]-x)+(p[1]-y)*(p[1]-y));
+   if(q<d){d=q;best=n;}
+ }
+ return best;
+}
+function pointerXY(e){var r=canvas.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];}
+
+canvas.addEventListener("pointerdown",function(e){
+ var p=pointerXY(e), n=nearest(p[0],p[1]);
+ if(n){selected=n;drag={x:p[0],y:p[1],start:target[n].slice()}; if(armed)startRecording(false);}
+ else orbit={x:p[0],y:p[1],yaw:cam.yaw,pitch:cam.pitch};
+ try{canvas.setPointerCapture(e.pointerId);}catch(_){}
+});
+canvas.addEventListener("pointermove",function(e){
+ var p=pointerXY(e);
+ if(drag&&selected){
+   var dx=(p[0]-drag.x)/380, dy=(p[1]-drag.y)/380, q=drag.start.slice(), m=plane.value;
+   if(m==="xy"){q[0]+=dx;q[1]-=dy;}
+   if(m==="xz"){q[0]+=dx;q[2]+=dy;}
+   if(m==="yz"){q[1]-=dy;q[2]+=dx;}
+   target[selected]=q;
+ }else if(orbit){
+   cam.yaw=orbit.yaw+(p[0]-orbit.x)*.008;
+   cam.pitch=Math.max(-1.15,Math.min(1.15,orbit.pitch+(p[1]-orbit.y)*.006));
+ }
+});
+canvas.addEventListener("pointerup",function(){drag=null;orbit=null;});
+canvas.addEventListener("wheel",function(e){
+ e.preventDefault();
+ var p=pointerXY(e),n=nearest(p[0],p[1]);
+ if(n){selected=n;target[n][2]+=(e.deltaY>0?.03:-.03);}
+ else cam.dist=Math.max(2.0,Math.min(5.5,cam.dist+e.deltaY*.002));
+},{passive:false});
+
+function snap(t){
+ var joints={};
+ for(var n in target)joints[n]={x:+target[n][0].toFixed(5),y:+target[n][1].toFixed(5),z:+target[n][2].toFixed(5),rotation:{x:0,y:0,z:0,w:1}};
+ frames.push({time:+t.toFixed(4),joints:joints});
+}
+function startRecording(reset){
+ if(reset){target=clone(BASE);frames=[];track=[];}
+ recording=true;playing=false;armed=false;t0=performance.now()/1000;lastFrame=-1;snap(0);statusEl.textContent="● REC 3D";
+}
+function stopRecording(){
+ if(recording&&frames.length){
+   track=frames.slice();duration=track[track.length-1].time;timeline.max=Math.max(.001,duration);
+   trackInfo.textContent=track.length+" frames • "+duration.toFixed(2)+" s • XYZ";
+   try{localStorage.setItem("hms_v9_2_track",JSON.stringify({format:"HMS-V9.7.4-3D/1.0",fps:FPS,duration:duration,frames:track}));}catch(_){}
+ }
+ recording=false;playing=false;armed=false;statusEl.textContent="Arrêt";
+}
+function frameAt(t){
+ if(!track.length)return null;if(t<=0)return track[0];if(t>=duration)return track[track.length-1];
+ var i=1;while(i<track.length&&track[i].time<t)i++;
+ var A=track[i-1],B=track[i],q=(t-A.time)/(B.time-A.time),j={};
+ for(var n in A.joints)j[n]={x:A.joints[n].x*(1-q)+B.joints[n].x*q,y:A.joints[n].y*(1-q)+B.joints[n].y*q,z:A.joints[n].z*(1-q)+B.joints[n].z*q,rotation:{x:0,y:0,z:0,w:1}};
+ return {joints:j};
+}
+function applyFrame(f){if(!f)return;for(var n in f.joints)if(target[n])target[n]=[f.joints[n].x,f.joints[n].y,f.joints[n].z];}
+function playTrack(){if(!track.length){alert("Aucune piste.");return;}recording=false;playing=true;play0=performance.now()/1000;statusEl.textContent="PLAY 3D";}
+
+
+function translateAll(dx,dy,dz){
+  for(var n in target){target[n][0]+=dx;target[n][1]+=dy;target[n][2]+=dz;}
+}
+function clamp01(v){return Math.max(0,Math.min(1,v));}
+function ease(t){t=clamp01(t);return t*t*(3-2*t);}
+function pulse(t,a,b){
+  if(t<=a||t>=b)return 0;
+  var q=(t-a)/(b-a);
+  return Math.sin(Math.PI*q);
+}
+function gaitPose(localU, running, reverse){
+  var p=localU*Math.PI*2;
+  var phaseL=localU%1, phaseR=(localU+.5)%1;
+  var stepLen=running?.50:.34, lift=running?.13:.075;
+  var pelvisBob=running?.040:.022, pelvisYaw=running?.075:.055;
+  var shoulderYaw=-pelvisYaw*1.25;
+  target.pelvis[1]+=pelvisBob*(1-Math.cos(p*2))*.5;
+  target.spine1[1]+=pelvisBob*.65*(1-Math.cos(p*2))*.5;
+  target.spine2[1]+=pelvisBob*.45*(1-Math.cos(p*2))*.5;
+  target.chest[1]+=pelvisBob*.25*(1-Math.cos(p*2))*.5;
+  target.pelvis[0]+=.012*Math.sin(p);
+  rotateGroupY(["hipL","hipR","kneeL","kneeR","ankleL","ankleR","heelL","heelR","ballL","ballR","toeL","toeR"],target.pelvis,pelvisYaw*Math.sin(p));
+  rotateGroupY(["clavicleL","shoulderL","elbowL","wristL","handL","clavicleR","shoulderR","elbowR","wristR","handR"],target.chest,shoulderYaw*Math.sin(p));
+  function leg(side,ph){
+    var knee=target["knee"+side], ankle=target["ankle"+side], heel=target["heel"+side], ball=target["ball"+side], toe=target["toe"+side];
+    if(ph<.62){
+      var q=ph/.62, z=lerp(stepLen*.47,-stepLen*.53,q);
+      if(reverse)z=-z;
+      ankle[2]+=z;heel[2]+=z;ball[2]+=z;toe[2]+=z;
+      knee[1]-=.045*Math.sin(Math.PI*Math.min(1,q/.42));knee[2]+=.055*Math.sin(Math.PI*q)*(reverse?-1:1);
+      if(q<.18){heel[1]+=.020*(1-q/.18);ball[1]+=.010;toe[1]+=.018;}
+      else if(q>.72){var r=(q-.72)/.28;heel[1]+=.085*smoothstep(r);ankle[1]+=.035*smoothstep(r);}
+    }else{
+      var q2=(ph-.62)/.38, z2=lerp(-stepLen*.53,stepLen*.47,q2);
+      if(reverse)z2=-z2;
+      var arc=Math.sin(Math.PI*q2);
+      ankle[2]+=z2;heel[2]+=z2;ball[2]+=z2;toe[2]+=z2;
+      ankle[1]+=lift*arc;heel[1]+=lift*arc;ball[1]+=lift*arc;toe[1]+=lift*arc;
+      knee[1]-=(running?.17:.11)*arc;knee[2]+=(running?.19:.13)*arc*(reverse?-1:1);
+      toe[1]+=.025*arc;ball[1]+=.015*arc;
+    }
+  }
+  leg("L",phaseL);leg("R",phaseR);
+  var armA=(running?.25:.16)*Math.sin(p)*(reverse?-1:1);
+  target.shoulderL[2]-=armA*.25;target.elbowL[2]-=armA*.62;target.wristL[2]-=armA;target.handL[2]-=armA*1.08;
+  target.shoulderR[2]+=armA*.25;target.elbowR[2]+=armA*.62;target.wristR[2]+=armA;target.handR[2]+=armA*1.08;
+}
+function strafePose(localU,dir){
+  var p=localU*Math.PI*2;
+  var s=Math.sin(p), a=Math.abs(s);
+  target.pelvis[1]+=.018*(1-Math.cos(p*2))*.5;
+  target.kneeL[1]-=.05*a;target.kneeR[1]-=.05*a;
+  target.ankleL[0]+=.10*Math.max(0,-s)*dir;
+  target.ankleR[0]+=.10*Math.max(0,s)*dir;
+  target.handL[2]-=.07*s;target.handR[2]+=.07*s;
+}
+function guardPose(){
+  target.handL[0]=-.28;target.handL[1]=1.43;target.handL[2]=.10;
+  target.wristL[0]=-.27;target.wristL[1]=1.37;target.wristL[2]=.06;
+  target.elbowL[0]=-.34;target.elbowL[1]=1.24;target.elbowL[2]=.02;
+  target.handR[0]=.28;target.handR[1]=1.43;target.handR[2]=.10;
+  target.wristR[0]=.27;target.wristR[1]=1.37;target.wristR[2]=.06;
+  target.elbowR[0]=.34;target.elbowR[1]=1.24;target.elbowR[2]=.02;
+}
+function punch(side,amt,hook){
+  guardPose();
+  var s=side==="R"?1:-1;
+  var hand=target["hand"+side], wrist=target["wrist"+side], elbow=target["elbow"+side], shoulder=target["shoulder"+side];
+  if(hook){
+    hand[0]+=s*.26*amt;hand[2]+=.27*amt;hand[1]+=.02*amt;
+    wrist[0]+=s*.20*amt;wrist[2]+=.21*amt;
+    elbow[0]+=s*.13*amt;elbow[2]+=.11*amt;
+  }else{
+    hand[2]+=.48*amt;wrist[2]+=.38*amt;elbow[2]+=.22*amt;shoulder[2]+=.05*amt;
+  }
+  rotateGroupY(["chest","neck","head","clavicleL","shoulderL","elbowL","wristL","handL","clavicleR","shoulderR","elbowR","wristR","handR"],target.pelvis,-s*.10*amt);
+}
+function kick(side,amt,kind){
+  guardPose();
+  var s=side==="R"?1:-1, hip=target["hip"+side],knee=target["knee"+side],ankle=target["ankle"+side],heel=target["heel"+side],ball=target["ball"+side],toe=target["toe"+side];
+  var support=side==="R"?"L":"R";
+  target.pelvis[0]-=s*.035*amt;
+  target["knee"+support][1]-=.04*amt;
+  if(kind==="round"){
+    knee[0]+=s*.18*amt;knee[1]+=.10*amt;knee[2]+=.18*amt;
+    ankle[0]+=s*.42*amt;ankle[1]+=.28*amt;ankle[2]+=.36*amt;
+  }else{
+    knee[1]+=.18*amt;knee[2]+=.22*amt;
+    ankle[1]+=.33*amt;ankle[2]+=.58*amt;
+  }
+  heel[0]+=(ankle[0]-BASE["ankle"+side][0]);heel[1]+=(ankle[1]-BASE["ankle"+side][1]);heel[2]+=(ankle[2]-BASE["ankle"+side][2]);
+  ball[0]+=(ankle[0]-BASE["ankle"+side][0]);ball[1]+=(ankle[1]-BASE["ankle"+side][1]);ball[2]+=(ankle[2]-BASE["ankle"+side][2]);
+  toe[0]+=(ankle[0]-BASE["ankle"+side][0]);toe[1]+=(ankle[1]-BASE["ankle"+side][1]);toe[2]+=(ankle[2]-BASE["ankle"+side][2]);
+}
+function jumpPose(localU,forward){
+  var flight=(localU>.16&&localU<.84)?Math.sin((localU-.16)/.68*Math.PI):0;
+  var crouch=localU<.16?Math.sin(localU/.16*Math.PI):0;
+  target.pelvis[1]-=.10*crouch;target.kneeL[1]-=.07*crouch;target.kneeR[1]-=.07*crouch;
+  translateAll(0,.38*flight,forward*.55*ease(localU));
+  var a=Math.min(1,Math.max(0,(localU-.10)/.34));
+  target.handL[1]+=.58*a;target.handR[1]+=.58*a;target.handL[0]+=.16*a;target.handR[0]-=.16*a;
+}
+
+function walkingTurnPose(u, turnSign, angleAbs, gaitPhase){
+  // Marche continue pendant le virage, avec phase de pas continue.
+  gaitPose(gaitPhase%1,false,false);
+
+  // Courbe douce : faible inclinaison intérieure, sans rebond vertical artificiel.
+  var bend = Math.sin(Math.PI*u);
+  target.pelvis[0] += turnSign*.012*bend;
+  target.chest[0] += turnSign*.020*bend;
+  target.head[0] += turnSign*.014*bend;
+
+  // Tête/épaules anticipent légèrement, sans à-coup.
+  var anticipation = turnSign*.050*bend;
+  rotateGroupY(
+    ["chest","neck","head","clavicleL","shoulderL","elbowL","wristL","handL",
+     "clavicleR","shoulderR","elbowR","wristR","handR"],
+    target.pelvis, anticipation
+  );
+
+  // Appui intérieur très léger pour éviter l'effet "roulette".
+  if(turnSign>0){
+    target.kneeL[1]-=.014*bend;
+    target.ankleL[0]-=.012*bend;
+  }else{
+    target.kneeR[1]-=.014*bend;
+    target.ankleR[0]+=.012*bend;
+  }
+}
+function applySegment(type,u){
+  if(type==="walk")gaitPose((u*2.2)%1,false,false);
+  else if(type==="backwalk")gaitPose((u*1.8)%1,false,true);
+  else if(type==="turn90L")walkingTurnPose(u,+1,Math.PI/2,u*1.35);
+  else if(type==="turn90R")walkingTurnPose(u,-1,Math.PI/2,u*1.35);
+  else if(type==="turn180L")walkingTurnPose(u,+1,Math.PI,u*2.15);
+  else if(type==="turn180R")walkingTurnPose(u,-1,Math.PI,u*2.15);
+}
+function sequenceDuration(seq){var d=0;for(var i=0;i<seq.length;i++)d+=seq[i].d;return d;}
+function makeSequence(seq,label){
+  frames=[];
+  var total=sequenceDuration(seq), N=Math.round(total*FPS);
+  var starts=[], acc=0;
+  for(var s=0;s<seq.length;s++){starts.push(acc);acc+=seq[s].d;}
+
+  function turnAmount(type){
+    if(type==="turn90L")return Math.PI/2;
+    if(type==="turn90R")return -Math.PI/2;
+    if(type==="turn180L")return Math.PI;
+    if(type==="turn180R")return -Math.PI;
+    return 0;
+  }
+  function baseSpeed(type){
+    if(type==="walk")return .43;
+    if(type==="backwalk")return -.34;
+    if(type==="turn90L"||type==="turn90R")return .40;
+    if(type==="turn180L"||type==="turn180R")return .34;
+    return 0;
+  }
+  function edgeEnvelope(t){
+    // Démarrage/arrêt progressif uniquement sur l'ensemble de l'animation.
+    var ramp=.42;
+    var a=Math.min(1,t/ramp);
+    var b=Math.min(1,(total-t)/ramp);
+    var x=Math.max(0,Math.min(a,b));
+    return x*x*(3-2*x);
+  }
+
+  var worldX=0, worldZ=0, yaw=0, lastT=0, prevSeg=-1;
+  var segStartYaw=0;
+  var gaitClock=0;
+
+  for(var i=0;i<=N;i++){
+    var t=i/FPS;if(t>total)t=total;
+    var si=seq.length-1;
+    for(var j=0;j<seq.length;j++){
+      if(t<starts[j]+seq[j].d){si=j;break;}
+    }
+    var seg=seq[si];
+    var local=clamp01((t-starts[si])/seg.d);
+
+    if(si!==prevSeg){
+      segStartYaw=yaw;
+      prevSeg=si;
+    }
+
+    var delta=turnAmount(seg.type);
+    var yawNow = delta ? segStartYaw + delta*ease(local) : segStartYaw;
+
+    var dt=Math.max(0,t-lastT);
+    var speed=baseSpeed(seg.type)*edgeEnvelope(t);
+    var midYaw=(yaw+yawNow)*.5;
+
+    worldX += -Math.sin(midYaw)*speed*dt;
+    worldZ +=  Math.cos(midYaw)*speed*dt;
+
+    // Horloge de marche continue : aucune remise à zéro entre marche et virage.
+    gaitClock += Math.abs(speed)*dt*2.85;
+
+    yaw=yawNow;
+    lastT=t;
+    target=clone(BASE);
+
+    if(seg.type==="walk"){
+      gaitPose(gaitClock%1,false,false);
+    }else if(seg.type==="backwalk"){
+      gaitPose(gaitClock%1,false,true);
+    }else if(seg.type==="turn90L"){
+      walkingTurnPose(local,+1,Math.PI/2,gaitClock);
+    }else if(seg.type==="turn90R"){
+      walkingTurnPose(local,-1,Math.PI/2,gaitClock);
+    }else if(seg.type==="turn180L"){
+      walkingTurnPose(local,+1,Math.PI,gaitClock);
+    }else if(seg.type==="turn180R"){
+      walkingTurnPose(local,-1,Math.PI,gaitClock);
+    }
+
+    if(Math.abs(yaw)>.000001)rotateWholeBodyY(yaw);
+    translateAll(worldX,0,worldZ);
+    snap(t);
+  }
+
+  track=frames.slice();
+  duration=total;
+  timeline.max=total;
+  timeline.value=0;
+  applyFrame(track[0]);
+  trackInfo.textContent=label+" • "+track.length+" frames • continuous gait • no jolts";
+}
+
+function rotateWholeBodyY(ang){
+  var c=target.pelvis.slice();
+  for(var n in target)rotateYPoint(target[n],c,ang);
+}
+function slipPose(dir,amt){
+  guardPose();
+  var s=dir==="R"?1:-1;
+  target.pelvis[0]+=.025*s*amt;
+  target.spine1[0]+=.045*s*amt;
+  target.spine2[0]+=.070*s*amt;
+  target.chest[0]+=.090*s*amt;
+  target.neck[0]+=.105*s*amt;
+  target.head[0]+=.120*s*amt;
+  target.head[1]-=.025*amt;
+}
+function pullPose(amt){
+  guardPose();
+  target.pelvis[2]-=.03*amt;
+  target.spine1[2]-=.05*amt;
+  target.spine2[2]-=.08*amt;
+  target.chest[2]-=.11*amt;
+  target.neck[2]-=.13*amt;
+  target.head[2]-=.16*amt;
+}
+function lowKick(side,amt){
+  guardPose();
+  var s=side==="R"?1:-1, support=side==="R"?"L":"R";
+  var knee=target["knee"+side],ankle=target["ankle"+side],heel=target["heel"+side],ball=target["ball"+side],toe=target["toe"+side];
+  target.pelvis[0]-=s*.028*amt;
+  target.pelvis[2]+=.018*amt;
+  target["knee"+support][1]-=.035*amt;
+  knee[0]+=s*.12*amt;knee[1]+=.075*amt;knee[2]+=.17*amt;
+  ankle[0]+=s*.33*amt;ankle[1]+=.105*amt;ankle[2]+=.32*amt;
+  var dx=ankle[0]-BASE["ankle"+side][0],dy=ankle[1]-BASE["ankle"+side][1],dz=ankle[2]-BASE["ankle"+side][2];
+  [heel,ball,toe].forEach(function(p){p[0]+=dx;p[1]+=dy;p[2]+=dz;});
+  rotateGroupY(["chest","neck","head","clavicleL","shoulderL","elbowL","wristL","handL","clavicleR","shoulderR","elbowR","wristR","handR"],target.pelvis,-s*.16*amt);
+}
+function bodyKick(side,amt){
+  guardPose();
+  var s=side==="R"?1:-1, support=side==="R"?"L":"R";
+  var knee=target["knee"+side],ankle=target["ankle"+side],heel=target["heel"+side],ball=target["ball"+side],toe=target["toe"+side];
+  target.pelvis[0]-=s*.035*amt;target["knee"+support][1]-=.05*amt;
+  knee[0]+=s*.16*amt;knee[1]+=.18*amt;knee[2]+=.21*amt;
+  ankle[0]+=s*.42*amt;ankle[1]+=.36*amt;ankle[2]+=.40*amt;
+  var dx=ankle[0]-BASE["ankle"+side][0],dy=ankle[1]-BASE["ankle"+side][1],dz=ankle[2]-BASE["ankle"+side][2];
+  [heel,ball,toe].forEach(function(p){p[0]+=dx;p[1]+=dy;p[2]+=dz;});
+  rotateGroupY(["chest","neck","head","clavicleL","shoulderL","elbowL","wristL","handL","clavicleR","shoulderR","elbowR","wristR","handR"],target.pelvis,-s*.22*amt);
+}
+function kneeStrike(side,amt){
+  guardPose();
+  var s=side==="R"?1:-1;
+  var knee=target["knee"+side],ankle=target["ankle"+side],heel=target["heel"+side],ball=target["ball"+side],toe=target["toe"+side];
+  knee[1]+=.34*amt;knee[2]+=.31*amt;knee[0]+=s*.035*amt;
+  ankle[1]+=.18*amt;ankle[2]+=.12*amt;
+  var dx=ankle[0]-BASE["ankle"+side][0],dy=ankle[1]-BASE["ankle"+side][1],dz=ankle[2]-BASE["ankle"+side][2];
+  [heel,ball,toe].forEach(function(p){p[0]+=dx;p[1]+=dy;p[2]+=dz;});
+  target.chest[2]+=.055*amt;
+}
+function levelChangePose(amt){
+  guardPose();
+  target.pelvis[1]-=.24*amt; target.pelvis[2]+=.15*amt;
+  target.spine1[1]-=.20*amt; target.spine1[2]+=.13*amt;
+  target.spine2[1]-=.15*amt; target.spine2[2]+=.11*amt;
+  target.chest[1]-=.10*amt; target.chest[2]+=.09*amt;
+  target.kneeL[1]-=.12*amt; target.kneeR[1]-=.08*amt;
+  target.kneeL[2]+=.14*amt; target.kneeR[2]+=.10*amt;
+  target.handL[1]-=.20*amt;target.handR[1]-=.20*amt;
+  target.handL[2]+=.22*amt;target.handR[2]+=.22*amt;
+}
+function feintPose(amt){
+  guardPose();
+  target.shoulderL[2]+=.04*amt;target.handL[2]+=.07*amt;
+  target.pelvis[1]-=.025*amt;
+  target.head[0]+=.025*amt;
+}
+function pivotPose(dir,amt){
+  guardPose();
+  var s=dir==="R"?1:-1;
+  rotateWholeBodyY(s*.42*amt);
+  translateAll(s*.18*amt,0,.05*amt);
+}
+function stepForward(amt){
+  translateAll(0,0,.22*amt);
+}
+function stepBack(amt){
+  translateAll(0,0,-.20*amt);
+}
+function makePreset(name){
+  if(name==="walk")return makeSequence([{type:"walk",d:4.6}],"Walk forward longue");
+  if(name==="backwalk")return makeSequence([{type:"backwalk",d:4.4}],"Walk backward longue");
+  if(name==="turn180L")return makeSequence([
+    {type:"walk",d:1.65},{type:"turn180L",d:2.55},{type:"walk",d:2.25}
+  ],"U-turn left fluide");
+  if(name==="turn180R")return makeSequence([
+    {type:"walk",d:1.65},{type:"turn180R",d:2.55},{type:"walk",d:2.25}
+  ],"U-turn right fluide");
+  if(name==="turn90L")return makeSequence([
+    {type:"walk",d:1.65},{type:"turn90L",d:1.95},{type:"walk",d:2.45}
+  ],"90° turn left fluide");
+  if(name==="turn90R")return makeSequence([
+    {type:"walk",d:1.65},{type:"turn90R",d:1.95},{type:"walk",d:2.45}
+  ],"90° turn right fluide");
+}
+
+document.getElementById("recBtn").onclick=function(){startRecording(true);};
+document.getElementById("stopBtn").onclick=stopRecording;
+document.getElementById("playBtn").onclick=playTrack;
+document.getElementById("easyBtn").onclick=function(){target=clone(BASE);frames=[];track=[];armed=true;statusEl.textContent="ARMÉ — bouge une articulation";};
+document.getElementById("poseBtn").onclick=function(){target=clone(BASE);pos=clone(BASE);selected=null;};
+var presetButtons=document.querySelectorAll("[data-preset]");
+for(var pb=0;pb<presetButtons.length;pb++)presetButtons[pb].onclick=function(){makePreset(this.getAttribute("data-preset"));};
+
+timeline.oninput=function(){if(!recording&&!playing&&track.length)applyFrame(frameAt(Number(timeline.value)));};
+
+document.getElementById("exportBtn").onclick=function(){
+ if(!track.length){alert("Aucune piste.");return;}
+ var data={format:"HMS-V9.7.4-3D/1.0",coordinate_system:"right-handed Y-up",fps:FPS,duration:duration,frames:track};
+ var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+ var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="human_motion_v9_7_4_smooth_directional_walk.json";a.click();
+ setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+};
+document.getElementById("importBtn").onclick=function(){document.getElementById("fileInput").click();};
+document.getElementById("fileInput").onchange=function(e){
+ var f=e.target.files&&e.target.files[0];if(!f)return;var reader=new FileReader();
+ reader.onload=function(){try{var d=JSON.parse(reader.result);track=d.frames||[];if(!track.length)throw new Error("aucune frame");duration=d.duration||track[track.length-1].time;timeline.max=duration;timeline.value=0;applyFrame(track[0]);trackInfo.textContent="JSON chargé • "+track.length+" frames";}catch(err){alert("JSON incompatible : "+err.message);}};
+ reader.readAsText(f);
+};
+
+function fmt(t){var ms=Math.floor((t%1)*1000),s=Math.floor(t)%60,m=Math.floor(t/60);return String(m).padStart(2,"0")+":"+String(s).padStart(2,"0")+"."+String(ms).padStart(3,"0");}
+
+var prevTarget=clone(target), secondaryPose=clone(target), simTime=0;
+function humanize(){
+  var now=performance.now()/1000, dt=Math.min(.033,Math.max(.001,now-simTime));simTime=now;
+  var sec=Number(secondaryCtrl.value);
+  // Aucun mouvement autonome au repos : pas de respiration, pas de thorax animé,
+  // pas de micro-balancement. L'inertie secondaire n'agit que pendant une action.
+  var active = playing || recording || drag !== null;
+  if(active && sec>0){
+    var soft=["head","handL","handR","wristL","wristR","toeL","toeR","ballL","ballR"];
+    for(var i=0;i<soft.length;i++){
+      var n=soft[i];
+      for(var j=0;j<3;j++){
+        var vel=(target[n][j]-prevTarget[n][j])/dt;
+        target[n][j]-=vel*.0025*sec;
+      }
+    }
+  }
+  prevTarget=clone(target);
+}
+function loop(){
+ var now=performance.now()/1000;
+ if(recording){var t=now-t0,i=Math.floor(t*FPS);if(i>lastFrame){snap(i/FPS);lastFrame=i;}timeText.textContent=fmt(t);}
+ if(playing){var pt=now-play0;if(pt>=duration){pt=duration;playing=false;statusEl.textContent="Fin lecture";}applyFrame(frameAt(pt));timeline.value=pt;timeText.textContent=fmt(pt);}
+ humanize();
+ for(var n in target)for(var j=0;j<3;j++)pos[n][j]+=(target[n][j]-pos[n][j])*(.11+.12*(1-Number(secondaryCtrl.value)));
+ drawSkeleton();
+ requestAnimationFrame(loop);
+}
+
+window.addEventListener("error",function(e){
+ statusEl.textContent="Erreur";
+ debugEl.textContent="Erreur JS : "+e.message;
+ debugEl.style.background="#6b2020";
+});
+
+// First paint is forced synchronously so a skeleton is visible even before animation loop.
+resize();
+drawSkeleton();
+statusEl.textContent="Squelette 3D visible • triangulated body • long smooth motion";
+debugEl.textContent=" "+Object.keys(BASE).length+" main points • mesh triangulé • inertie • MMA";
+try{
+ var saved=JSON.parse(localStorage.getItem("hms_v9_2_track")||"null");
+ if(saved&&saved.frames&&saved.frames.length){track=saved.frames;duration=saved.duration||track[track.length-1].time;timeline.max=duration;applyFrame(track[0]);trackInfo.textContent="Dernière piste restaurée • "+track.length+" frames";}
+}catch(_){}
+requestAnimationFrame(loop);
+})();
+</script>
+<div style="position:fixed;right:10px;bottom:6px;z-index:9999;font:11px Arial,sans-serif;opacity:.65;pointer-events:none;">© 2026 KGStudio — All Rights Reserved</div>
+</body>
+</html>
