@@ -411,6 +411,22 @@ function gaitPose(localU, running, reverse){
       ankle[2]+=z2;heel[2]+=z2;ball[2]+=z2;toe[2]+=z2;
       ankle[1]+=lift*arc;heel[1]+=lift*arc;ball[1]+=lift*arc;toe[1]+=lift*arc;
       knee[1]-=(running?.17:.11)*arc;knee[2]+=(running?.19:.13)*arc*(reverse?-1:1);
+
+      if(reverse){
+        // Marche arrière : pendant la montée, le genou part d'abord
+        // en ADDUCTION, donc vers l'axe médian du corps.
+        var sideSign=(side==="L"?1:-1);
+        var adduction=Math.sin(Math.PI*Math.min(1,q2/.58));
+        knee[0]+=sideSign*.055*arc*adduction;
+
+        // Le pied accompagne légèrement le genou pour conserver
+        // une chaîne jambe/pied naturelle sans modifier la marche avant.
+        ankle[0]+=sideSign*.018*arc*adduction;
+        heel[0]+=sideSign*.018*arc*adduction;
+        ball[0]+=sideSign*.014*arc*adduction;
+        toe[0]+=sideSign*.010*arc*adduction;
+      }
+
       toe[1]+=.025*arc;ball[1]+=.015*arc;
     }
   }
